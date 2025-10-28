@@ -22,3 +22,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 
 # For global state (for throttling)
 once_cell = "1.19"
+
+# --- NEW ---
+# The command line argument parser
+clap = { version = "4.5", features = ["derive"] }

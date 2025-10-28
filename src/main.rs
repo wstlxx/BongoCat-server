@@ -1,20 +1,5 @@
 /*
  * pet-input-server: src/main.rs
- *
- * This Rust server listens for global keyboard/mouse events and broadcasts them
- * over WebSocket to any connected client (e.g., your desktop pet).
- *
- * Architecture for "No-Lag":
- * 1. `main` (Async Tokio Thread): Runs the WebSocket server.
- * 2. `rdev::listen` (Separate OS Thread): `rdev` spawns its own thread to
- * listen for system inputs. This is the "hot path".
- * 3. `event_callback` (Hot Path): This function is called by `rdev`. It MUST
- * return almost instantly to prevent system-wide input lag.
- * 4. `tokio::sync::broadcast`: A thread-safe "channel" connects the two.
- * 5. `event_callback`'s only job is to translate the event, apply throttling,
- * and `send()` it to the broadcast channel. This is a 1-microsecond operation.
- * 6. The `main` thread listens to the channel and forwards events to all
- * connected WebSocket clients asynchronously.
  */
 
 use futures_util::{sink::SinkExt, stream::StreamExt};
@@ -27,10 +12,11 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
-// --- Protocol Definition ---
-// These structs will be serialized into the exact JSON format
-// your Python script was using.
+// --- NEW ---
+use clap::Parser;
 
+// --- Protocol Definition ---
+// ... (Structs Action, Coords, ActionValue are all unchanged) ...
 #[derive(Serialize, Clone, Debug)]
 struct Coords {
     x: f64,
@@ -38,7 +24,7 @@ struct Coords {
 }
 
 #[derive(Serialize, Clone, Debug)]
-#[serde(untagged)] // This lets `value` be EITHER a String OR a Coords object
+#[serde(untagged)]
 enum ActionValue {
     String(String),
     Coords(Coords),
@@ -51,17 +37,27 @@ struct Action {
 }
 
 // --- Mouse Move Throttling ---
-// We use a global, thread-safe Mutex to store the last move time.
-// This prevents flooding the WebSocket with 1000s of "MouseMove" events.
+// ... (Lazy static LAST_MOUSE_MOVE is unchanged) ...
 use once_cell::sync::Lazy;
 static LAST_MOUSE_MOVE: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now()));
 const MOUSE_MOVE_THROTTLE: Duration = Duration::from_millis(16); // ~60fps
 
+
+// --- NEW: Command Line Argument Definition ---
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// The port to listen on
+    #[arg(short, long, default_value_t = 8080)]
+    port: u16,
+}
+// --- END NEW ---
+
+
 /// The "Hot Path" callback. This MUST be fast.
+// ... (This entire function is unchanged) ...
 fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
-    // Attempt to translate the `rdev` event into our `Action` protocol
     let action = match event.event_type {
-        // --- Mouse Move (with Throttling) ---
         EventType::MouseMove { x, y } => {
             let mut last_move = LAST_MOUSE_MOVE.lock().unwrap();
             if last_move.elapsed() >= MOUSE_MOVE_THROTTLE {
@@ -71,11 +67,9 @@ fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
                     value: ActionValue::Coords(Coords { x, y }),
                 })
             } else {
-                None // Throttled, do nothing
+                None
             }
         }
-
-        // --- Mouse Clicks ---
         EventType::ButtonPress(button) => Some(Action {
             kind: "MousePress".to_string(),
             value: ActionValue::String(map_button(button)),
@@ -84,8 +78,6 @@ fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
             kind: "MouseRelease".to_string(),
             value: ActionValue::String(map_button(button)),
         }),
-
-        // --- Keyboard ---
         EventType::KeyPress(key) => map_key(key).map(|val| Action {
             kind: "KeyboardPress".to_string(),
             value: ActionValue::String(val),
@@ -94,22 +86,13 @@ fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
             kind: "KeyboardRelease".to_string(),
             value: ActionValue::String(val),
         }),
-
-        // We don't care about mouse wheel events
         _ => None,
     };
 
-    // If we have a valid action, log it and send it to the broadcast channel.
     if let Some(act) = action {
-        
-        // ---FIX 1---: Added logging, just like your Python script (skips MouseMove)
         if act.kind != "MouseMove" {
-            // We use `Debug` formatting (`:?`) for the Action struct
             println!("Broadcasting action: {:?}", act);
         }
-
-        // 2. Send to channel.
-        // `send` is very fast. We ignore the error if no clients are connected.
         let _ = broadcast_tx.send(act);
     }
 }
@@ -117,40 +100,47 @@ fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
 /// Main async function: runs the WebSocket server
 #[tokio::main]
 async fn main() {
-    // 1. Create the broadcast channel.
-    //    `tx` is the sender, `_rx` is a receiver we ignore (we subscribe later)
+    // --- CHANGED ---
+    // 1. Parse command-line arguments
+    let cli = Cli::parse();
+    let port = cli.port;
+    // --- END CHANGED ---
+
+    // 2. Create the broadcast channel.
     let (broadcast_tx, _rx) = broadcast::channel::<Action>(1024);
 
-    // 2. Spawn a separate OS thread for `rdev` to listen on.
-    //    This is critical. `rdev::listen` blocks its thread, so it MUST
-    //    not be on the main `tokio` async thread.
+    // 3. Spawn a separate OS thread for `rdev` to listen on.
     let tx_clone = broadcast_tx.clone();
     std::thread::spawn(move || {
         println!("Input listener thread started. Listening for global input...");
-        // Pass the broadcast sender to the callback
         if let Err(error) = listen(move |event| event_callback(event, &tx_clone)) {
             eprintln!("Error listening to input: {:?}", error);
         }
     });
 
-    // 3. Start the WebSocket server on the main async thread
-    let addr = "0.0.0.0:8080";
-    let listener = TcpListener::bind(addr).await.expect("Failed to bind");
+    // --- CHANGED ---
+    // 4. Start the WebSocket server on the main async thread
+    //    Use the port from the CLI arguments
+    let addr = format!("0.0.0.0:{}", port);
+    // --- END CHANGED ---
+
+    let listener = TcpListener::bind(&addr).await.expect("Failed to bind");
+
+    // --- CHANGED ---
+    // 5. Print the address we are *actually* using
     println!("WebSocket server started on: ws://{}", addr);
+    // --- END CHANGED ---
 
-    // 4. Accept new connections
+    // 6. Accept new connections
     while let Ok((stream, _)) = listener.accept().await {
-        // For each new connection, clone the broadcast sender
         let tx = broadcast_tx.clone();
-        // And subscribe to *receive* messages from the channel
         let rx = tx.subscribe();
-
-        // Spawn a new async task for *this specific client*
         tokio::spawn(handle_connection(stream, rx));
     }
 }
 
 /// Handles a single WebSocket client connection
+// ... (This entire function is unchanged) ...
 async fn handle_connection(stream: TcpStream, mut broadcast_rx: broadcast::Receiver<Action>) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -161,46 +151,32 @@ async fn handle_connection(stream: TcpStream, mut broadcast_rx: broadcast::Recei
     };
     println!("Client connected.");
 
-    // Split the WebSocket into a sender and receiver
     let (mut ws_sender, _ws_receiver) = ws_stream.split();
 
-    // Loop: wait for a new event from the broadcast channel
     while let Ok(action) = broadcast_rx.recv().await {
-        // Serialize our `Action` struct to a JSON string
         let msg_str = match serde_json::to_string(&action) {
             Ok(s) => s,
-            Err(_) => continue, // Should not happen
+            Err(_) => continue,
         };
-
-        // Send the JSON string to this client
         if ws_sender.send(Message::Text(msg_str)).await.is_err() {
-            // Error sending (e.g., client disconnected)
-            // Break the loop for this client.
             break;
         }
     }
-
     println!("Client disconnected.");
 }
 
 // --- Key/Button Mapping Utilities ---
-// These functions translate `rdev` keys to the string protocol.
+// ... (map_button and map_key functions are unchanged) ...
 
-/// Translates `rdev::Button` to "Mouse1", "Mouse2", "Mouse3"
 fn map_button(button: rdev::Button) -> String {
-    // ---FIX 2---: Changed logic to match Python's `get(button, 1)` default.
     match button {
         rdev::Button::Left => "Mouse1".to_string(),
         rdev::Button::Right => "Mouse2".to_string(),
         rdev::Button::Middle => "Mouse3".to_string(),
-        // All other buttons (Unknown, side buttons, etc.)
-        // now default to "Mouse1", just like your Python script.
         _ => "Mouse1".to_string(),
     }
 }
 
-// This map normalizes Left/Right variants (e.g., ControlLeft -> Control)
-// This is lazy-loaded for efficiency
 static KEY_MAP: Lazy<HashMap<Key, &'static str>> = Lazy::new(|| {
     let mut m = HashMap::new();
     m.insert(Key::Space, "Space");
@@ -210,7 +186,7 @@ static KEY_MAP: Lazy<HashMap<Key, &'static str>> = Lazy::new(|| {
     m.insert(Key::ControlRight, "Control");
     m.insert(Key::ShiftLeft, "Shift");
     m.insert(Key::ShiftRight, "Shift");
-    m.insert(Key::MetaLeft, "Meta"); // "Cmd" on macOS, "Windows" key
+    m.insert(Key::MetaLeft, "Meta");
     m.insert(Key::MetaRight, "Meta");
     m.insert(Key::Escape, "Escape");
     m.insert(Key::F1, "F1");
@@ -226,7 +202,7 @@ static KEY_MAP: Lazy<HashMap<Key, &'static str>> = Lazy::new(|| {
     m.insert(Key::F11, "F11");
     m.insert(Key::F12, "F12");
     m.insert(Key::Tab, "Tab");
-    m.insert(Key::Return, "Return"); // 'Enter' key
+    m.insert(Key::Return, "Return");
     m.insert(Key::Backspace, "Backspace");
     m.insert(Key::CapsLock, "CapsLock");
     m.insert(Key::Insert, "Insert");
@@ -275,7 +251,6 @@ static KEY_MAP: Lazy<HashMap<Key, &'static str>> = Lazy::new(|| {
     m.insert(Key::Num8, "Num8");
     m.insert(Key::Num9, "Num9");
     m.insert(Key::Num0, "Num0");
-    // Numpad keys
     m.insert(Key::Kp0, "Num0");
     m.insert(Key::Kp1, "Num1");
     m.insert(Key::Kp2, "Num2");
@@ -289,20 +264,11 @@ static KEY_MAP: Lazy<HashMap<Key, &'static str>> = Lazy::new(|| {
     m
 });
 
-/// Translates `rdev::Key` to the protocol string (e.g., "KeyA", "Space")
 fn map_key(key: rdev::Key) -> Option<String> {
-    // Check our map first for special keys
     if let Some(mapped) = KEY_MAP.get(&key) {
         return Some(mapped.to_string());
     }
-
-    // Fallback for keys not in the map (e.g., ';', '=', ',')
-    // `rdev` doesn't have good variants for these, so we use `Unknown`
     if let Key::Unknown(code) = key {
-        // This part is OS-dependent and less reliable,
-        // but it's the best we can do for non-standard keys.
-        // On Windows, `code` is a virtual key code.
-        // We can add more common ones here if needed.
         match code {
             188 => Some(",".to_string()),
             190 => Some(".".to_string()),
