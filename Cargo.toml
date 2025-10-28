@@ -1,0 +1,24 @@
+[package]
+name = "pet-input-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# The high-performance input listener
+rdev = "0.5.3"
+
+# For serializing our data to the JSON protocol
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# The asynchronous runtime
+tokio = { version = "1", features = ["full"] }
+
+# The WebSocket server library
+tokio-tungstenite = "0.21"
+
+# For handling futures
+futures-util = { version = "0.3", features = ["sink"] }
+
+# For global state (for throttling)
+once_cell = "1.19"

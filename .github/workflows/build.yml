@@ -1,0 +1,26 @@
+name: Build Rust EXE for Windows
+
+on:
+  push:
+    branches: [ "main" ] # Runs on every push to the main branch
+  workflow_dispatch:      # Allows you to run it manually
+
+jobs:
+  build:
+    runs-on: windows-latest # CRITICAL: Build on a Windows machine
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release EXE
+        run: cargo build --release
+
+      - name: Upload EXE as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pet-input-server-exe
+          path: target/release/pet-input-server.exe
