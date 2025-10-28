@@ -99,8 +99,16 @@ fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
         _ => None,
     };
 
-    // If we have a valid action, send it to the broadcast channel.
+    // If we have a valid action, log it and send it to the broadcast channel.
     if let Some(act) = action {
+        
+        // ---FIX 1---: Added logging, just like your Python script (skips MouseMove)
+        if act.kind != "MouseMove" {
+            // We use `Debug` formatting (`:?`) for the Action struct
+            println!("Broadcasting action: {:?}", act);
+        }
+
+        // 2. Send to channel.
         // `send` is very fast. We ignore the error if no clients are connected.
         let _ = broadcast_tx.send(act);
     }
@@ -180,13 +188,14 @@ async fn handle_connection(stream: TcpStream, mut broadcast_rx: broadcast::Recei
 
 /// Translates `rdev::Button` to "Mouse1", "Mouse2", "Mouse3"
 fn map_button(button: rdev::Button) -> String {
+    // ---FIX 2---: Changed logic to match Python's `get(button, 1)` default.
     match button {
         rdev::Button::Left => "Mouse1".to_string(),
         rdev::Button::Right => "Mouse2".to_string(),
         rdev::Button::Middle => "Mouse3".to_string(),
-        // Map other buttons if your pet needs them
-        rdev::Button::Unknown(code) => format!("Mouse{}", code),
-        // **FIXED:** Removed the unreachable `_` arm
+        // All other buttons (Unknown, side buttons, etc.)
+        // now default to "Mouse1", just like your Python script.
+        _ => "Mouse1".to_string(),
     }
 }
 
@@ -253,7 +262,7 @@ static KEY_MAP: Lazy<HashMap<Key, &'static str>> = Lazy::new(|| {
     m.insert(Key::KeyX, "KeyX");
     m.insert(Key::KeyC, "KeyC");
     m.insert(Key::KeyV, "KeyV");
-    m.insert(Key::KeyB, "KeyB"); // **FIXED:** Removed the "T " typo
+    m.insert(Key::KeyB, "KeyB");
     m.insert(Key::KeyN, "KeyN");
     m.insert(Key::KeyM, "KeyM");
     m.insert(Key::Num1, "Num1");
@@ -277,7 +286,7 @@ static KEY_MAP: Lazy<HashMap<Key, &'static str>> = Lazy::new(|| {
     m.insert(Key::Kp7, "Num7");
     m.insert(Key::Kp8, "Num8");
     m.insert(Key::Kp9, "Num9");
-    m // **FIXED:** Removed the stray "m" from here
+    m
 });
 
 /// Translates `rdev::Key` to the protocol string (e.g., "KeyA", "Space")
