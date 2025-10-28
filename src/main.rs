@@ -82,7 +82,6 @@ fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
     };
 
     if let Some(act) = action {
-        // ---FIX 1---: REMOVED the blocking `println!` from here.
         // We only do the fast `send` operation.
         let _ = broadcast_tx.send(act);
     }
@@ -107,9 +106,7 @@ async fn main() {
         }
     });
 
-    // ---FIX 2---: Spawn a NEW, dedicated async task just for logging.
-    // This task subscribes to the channel and runs on the async thread pool,
-    // NOT on the sensitive input thread.
+    // 4. Spawn a NEW, dedicated async task just for logging.
     let mut logging_rx = broadcast_tx.subscribe();
     tokio::spawn(async move {
         while let Ok(action) = logging_rx.recv().await {
@@ -119,14 +116,13 @@ async fn main() {
             }
         }
     });
-    // ---END FIX---
 
-    // 4. Start the WebSocket server
+    // 5. Start the WebSocket server
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await.expect("Failed to bind");
     println!("WebSocket server started on: ws://{}", addr);
 
-    // 5. Accept new connections
+    // 6. Accept new connections
     while let Ok((stream, _)) = listener.accept().await {
         let tx = broadcast_tx.clone();
         let rx = tx.subscribe();
@@ -160,12 +156,13 @@ async fn handle_connection(stream: TcpStream, mut broadcast_rx: broadcast::Recei
 }
 
 // --- Key/Button Mapping Utilities ---
-// ... (map_button and map_key functions are unchanged) ...
 
 fn map_button(button: rdev::Button) -> String {
     match button {
         rdev::Button::Left => "Mouse1".to_string(),
-        rdev::Button::Right => "Mouse2".tostring(),
+        // --- THIS LINE IS FIXED ---
+        rdev::Button::Right => "Mouse2".to_string(),
+        // ---
         rdev::Button::Middle => "Mouse3".to_string(),
         _ => "Mouse1".to_string(),
     }
