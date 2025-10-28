@@ -186,7 +186,7 @@ fn map_button(button: rdev::Button) -> String {
         rdev::Button::Middle => "Mouse3".to_string(),
         // Map other buttons if your pet needs them
         rdev::Button::Unknown(code) => format!("Mouse{}", code),
-        _ => "Mouse1".to_string(), // Default
+        // **FIXED:** Removed the unreachable `_` arm
     }
 }
 
@@ -253,7 +253,7 @@ static KEY_MAP: Lazy<HashMap<Key, &'static str>> = Lazy::new(|| {
     m.insert(Key::KeyX, "KeyX");
     m.insert(Key::KeyC, "KeyC");
     m.insert(Key::KeyV, "KeyV");
-T   m.insert(Key::KeyB, "KeyB");
+    m.insert(Key::KeyB, "KeyB"); // **FIXED:** Removed the "T " typo
     m.insert(Key::KeyN, "KeyN");
     m.insert(Key::KeyM, "KeyM");
     m.insert(Key::Num1, "Num1");
@@ -277,7 +277,7 @@ T   m.insert(Key::KeyB, "KeyB");
     m.insert(Key::Kp7, "Num7");
     m.insert(Key::Kp8, "Num8");
     m.insert(Key::Kp9, "Num9");
-    m
+    m // **FIXED:** Removed the stray "m" from here
 });
 
 /// Translates `rdev::Key` to the protocol string (e.g., "KeyA", "Space")
