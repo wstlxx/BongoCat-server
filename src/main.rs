@@ -11,12 +11,9 @@ use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
-
-// --- NEW ---
 use clap::Parser;
 
 // --- Protocol Definition ---
-// ... (Structs Action, Coords, ActionValue are all unchanged) ...
 #[derive(Serialize, Clone, Debug)]
 struct Coords {
     x: f64,
@@ -37,13 +34,11 @@ struct Action {
 }
 
 // --- Mouse Move Throttling ---
-// ... (Lazy static LAST_MOUSE_MOVE is unchanged) ...
 use once_cell::sync::Lazy;
 static LAST_MOUSE_MOVE: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now()));
 const MOUSE_MOVE_THROTTLE: Duration = Duration::from_millis(16); // ~60fps
 
-
-// --- NEW: Command Line Argument Definition ---
+// --- Command Line Argument Definition ---
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -51,11 +46,8 @@ struct Cli {
     #[arg(short, long, default_value_t = 8080)]
     port: u16,
 }
-// --- END NEW ---
-
 
 /// The "Hot Path" callback. This MUST be fast.
-// ... (This entire function is unchanged) ...
 fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
     let action = match event.event_type {
         EventType::MouseMove { x, y } => {
@@ -90,9 +82,8 @@ fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
     };
 
     if let Some(act) = action {
-        if act.kind != "MouseMove" {
-            println!("Broadcasting action: {:?}", act);
-        }
+        // ---FIX 1---: REMOVED the blocking `println!` from here.
+        // We only do the fast `send` operation.
         let _ = broadcast_tx.send(act);
     }
 }
@@ -100,11 +91,9 @@ fn event_callback(event: Event, broadcast_tx: &broadcast::Sender<Action>) {
 /// Main async function: runs the WebSocket server
 #[tokio::main]
 async fn main() {
-    // --- CHANGED ---
     // 1. Parse command-line arguments
     let cli = Cli::parse();
     let port = cli.port;
-    // --- END CHANGED ---
 
     // 2. Create the broadcast channel.
     let (broadcast_tx, _rx) = broadcast::channel::<Action>(1024);
@@ -118,20 +107,26 @@ async fn main() {
         }
     });
 
-    // --- CHANGED ---
-    // 4. Start the WebSocket server on the main async thread
-    //    Use the port from the CLI arguments
+    // ---FIX 2---: Spawn a NEW, dedicated async task just for logging.
+    // This task subscribes to the channel and runs on the async thread pool,
+    // NOT on the sensitive input thread.
+    let mut logging_rx = broadcast_tx.subscribe();
+    tokio::spawn(async move {
+        while let Ok(action) = logging_rx.recv().await {
+            if action.kind != "MouseMove" {
+                // This println! is now safe and won't block the input.
+                println!("Broadcasting action: {:?}", action);
+            }
+        }
+    });
+    // ---END FIX---
+
+    // 4. Start the WebSocket server
     let addr = format!("0.0.0.0:{}", port);
-    // --- END CHANGED ---
-
     let listener = TcpListener::bind(&addr).await.expect("Failed to bind");
-
-    // --- CHANGED ---
-    // 5. Print the address we are *actually* using
     println!("WebSocket server started on: ws://{}", addr);
-    // --- END CHANGED ---
 
-    // 6. Accept new connections
+    // 5. Accept new connections
     while let Ok((stream, _)) = listener.accept().await {
         let tx = broadcast_tx.clone();
         let rx = tx.subscribe();
@@ -140,7 +135,6 @@ async fn main() {
 }
 
 /// Handles a single WebSocket client connection
-// ... (This entire function is unchanged) ...
 async fn handle_connection(stream: TcpStream, mut broadcast_rx: broadcast::Receiver<Action>) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -171,7 +165,7 @@ async fn handle_connection(stream: TcpStream, mut broadcast_rx: broadcast::Recei
 fn map_button(button: rdev::Button) -> String {
     match button {
         rdev::Button::Left => "Mouse1".to_string(),
-        rdev::Button::Right => "Mouse2".to_string(),
+        rdev::Button::Right => "Mouse2".tostring(),
         rdev::Button::Middle => "Mouse3".to_string(),
         _ => "Mouse1".to_string(),
     }
